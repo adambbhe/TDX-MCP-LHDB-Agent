@@ -23,6 +23,7 @@ if sys.platform == 'win32':
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tqcenter import tq
+from scoring_system import UnifiedScoringSystem
 
 
 class SignalType(Enum):
@@ -91,6 +92,7 @@ class EnhancedLimitUpStrategy:
 
         self.signals = []
         self.results = []
+        self.scoring_system = UnifiedScoringSystem()
 
     def run_full_market_scan(self):
         """全市场扫描"""
@@ -218,8 +220,8 @@ class EnhancedLimitUpStrategy:
                 details=details
             )
 
-            score = self._calculate_comprehensive_score(signal)
-            signal.score = round(score, 1)
+            kline_data = self._get_kline_data(stock_code)
+            score = self.scoring_system.calculate_score(signal, kline_data)
 
             return signal
 
@@ -271,57 +273,6 @@ class EnhancedLimitUpStrategy:
             return False
         except:
             return False
-
-    def _calculate_comprehensive_score(self, signal: StockSignal) -> float:
-        """计算综合评分"""
-        score = 50.0
-
-        type_scores = {
-            SignalType.LIMIT_UP: 40,
-            SignalType.NEAR_HIGH: 35,
-            SignalType.HIGH_OPEN: 30,
-            SignalType.STRONG_RISE: 25,
-            SignalType.VOLUME_SURGE: 25,
-            SignalType.MA_BULLISH: 20,
-        }
-        score += type_scores.get(signal.signal_type, 0)
-
-        if abs(signal.rise_pct) > 0:
-            if signal.rise_pct >= 9.9:
-                score += 15
-            elif signal.rise_pct >= 7:
-                score += 12
-            elif signal.rise_pct >= 5:
-                score += 9
-            elif signal.rise_pct >= 3:
-                score += 6
-            elif signal.rise_pct > 0:
-                score += 3
-
-        if signal.high_open_ratio >= 3:
-            score += 10
-        elif signal.high_open_ratio >= 1:
-            score += 5
-
-        if signal.amount > 500000000:
-            score += 10
-        elif signal.amount > 100000000:
-            score += 7
-        elif signal.amount > 30000000:
-            score += 4
-
-        if '*' in signal.name:
-            score -= 15
-
-        if signal.current_price < 5:
-            score -= 8
-        elif signal.current_price < 10:
-            score -= 3
-
-        if signal.rise_pct > 9.5:
-            score -= 5
-
-        return min(max(score, 0), 100)
 
     def _print_detailed_report(self, start_time):
         """打印详细报告"""

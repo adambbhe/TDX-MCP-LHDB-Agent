@@ -29,6 +29,7 @@ if sys.platform == 'win32':
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tqcenter import tq
+from scoring_system import UnifiedScoringSystem
 
 
 class SignalType(Enum):
@@ -224,165 +225,6 @@ class LimitUpDetector:
             return None
 
 
-class ScoringSystem:
-    """综合评分系统"""
-
-    def __init__(self):
-        self.weights = {
-            'signal_strength': 30,    # 信号强度
-            'price_position': 20,     # 价格位置(均线)
-            'volume_quality': 20,     # 量能质量
-            'momentum': 15,           # 动能指标
-            'risk_control': 15,       # 风控指标
-        }
-
-    def calculate_score(self, signal: StockSignal, kline_data=None) -> float:
-        """
-        计算综合评分 (0-100分)
-        """
-        score = 0.0
-
-        try:
-            score += self._score_signal_strength(signal) * self.weights['signal_strength'] / 100
-            score += self._score_price_position(signal, kline_data) * self.weights['price_position'] / 100
-            score += self._score_volume_quality(signal) * self.weights['volume_quality'] / 100
-            score += self._score_momentum(signal) * self.weights['momentum'] / 100
-            score += self._score_risk_control(signal) * self.weights['risk_control'] / 100
-
-            signal.score = round(score, 1)
-            signal.details['评分明细'] = {
-                '总分': f"{score:.1f}",
-                '信号强度': f"{self._score_signal_strength(signal):.1f}",
-                '价格位置': f"{self._score_price_position(signal, kline_data):.1f}",
-                '量能质量': f"{self._score_volume_quality(signal):.1f}",
-                '动能指标': f"{self._score_momentum(signal):.1f}",
-                '风控指标': f"{self._score_risk_control(signal):.1f}"
-            }
-
-            return score
-
-        except Exception as e:
-            print(f"  [ERROR] 评分计算失败: {e}")
-            return 0.0
-
-    def _score_signal_strength(self, signal: StockSignal) -> float:
-        """信号强度评分 (0-100)"""
-        type_scores = {
-            SignalType.LIMIT_UP: 100,
-            SignalType.NEAR_LIMIT_UP: 85,
-            SignalType.RAPID_RISE: 70,
-            SignalType.AUCTION_HIGH_OPEN: 60,
-            SignalType.STRONG_BREAKOUT: 75,
-        }
-        base_score = type_scores.get(signal.signal_type, 0)
-
-        if signal.signal_type == SignalType.LIMIT_UP:
-            rise = (signal.current_price / signal.last_close - 1) * 100
-            if rise >= 9.98:
-                base_score = 100  # 一字板或T字板
-            elif rise >= 9.95:
-                base_score = 95  # 强势封板
-
-        elif signal.signal_type == SignalType.AUCTION_HIGH_OPEN:
-            if signal.high_open_ratio >= 5:
-                base_score = 70
-            elif signal.high_open_ratio >= 3:
-                base_score = 65
-
-        return min(base_score, 100)
-
-    def _score_price_position(self, signal: StockSignal, kline_data=None) -> float:
-        """价格位置评分 (基于均线)"""
-        if not kline_data or signal.code not in kline_data:
-            if signal.current_price > signal.last_close:
-                return 60
-            return 40
-
-        df = kline_data[signal.code]
-        close_series = df['close']
-
-        if len(close_series) < 21:
-            return 50
-
-        ma5 = close_series.rolling(window=5).mean().iloc[-1]
-        ma10 = close_series.rolling(window=10).mean().iloc[-1]
-        ma20 = close_series.rolling(window=20).mean().iloc[-1]
-
-        signal.ma5 = round(ma5, 2)
-        signal.ma10 = round(ma10, 2)
-        signal.ma20 = round(ma20, 2)
-
-        price = signal.current_price
-
-        if price > ma5 > ma10 > ma20:
-            return 100  # 完美多头排列
-        elif price > ma5 > ma10:
-            return 85   # 双均线多头
-        elif price > ma5:
-            return 70   # 站上MA5
-        elif price > ma20:
-            return 55   # 在MA20上方但短期偏弱
-        else:
-            return 35   # 弱势
-
-    def _score_volume_quality(self, signal: StockSignal) -> float:
-        """量能质量评分"""
-        if signal.amount <= 0:
-            return 50
-
-        if signal.signal_type == SignalType.LIMIT_UP:
-            if signal.amount > 100000000:  # 1亿以上
-                return 95
-            elif signal.amount > 50000000:  # 5000万以上
-                return 85
-            else:
-                return 70
-
-        else:
-            ratio = signal.amount / max(signal.last_close * signal.volume, 1)
-            if ratio > 1.5:
-                return 85  # 放量明显
-            elif ratio > 1.0:
-                return 70  # 正常放量
-            else:
-                return 55  # 缩量
-
-    def _score_momentum(self, signal: StockSignal) -> float:
-        """动能指标评分"""
-        rise = (signal.current_price / signal.last_close - 1) * 100
-
-        if signal.signal_type == SignalType.LIMIT_UP:
-            return 95
-
-        elif rise >= 7:
-            return 90
-        elif rise >= 5:
-            return 80
-        elif rise >= 3:
-            return 70
-        elif rise >= 1:
-            return 60
-        elif rise >= 0:
-            return 50
-        else:
-            return 30
-
-    def _score_risk_control(self, signal: StockSignal) -> float:
-        """风控指标评分"""
-        score = 80  # 基础分
-
-        if '*' in signal.name:
-            score -= 30  # ST股扣分
-        if signal.current_price < 5:
-            score -= 10  # 低价股风险
-        if signal.high_open_ratio > 6:
-            score -= 15  # 高开过多风险
-        if (signal.current_price / signal.last_close - 1) > 0.095:
-            score -= 10  # 接近涨停追高风险
-
-        return max(score, 0)
-
-
 class RiskManager:
     """风控与仓位管理"""
 
@@ -481,7 +323,7 @@ class QuantLimitUpStrategy:
     def __init__(self):
         self.auction_analyzer = AuctionAnalyzer()
         self.limit_up_detector = LimitUpDetector()
-        self.scoring_system = ScoringSystem()
+        self.scoring_system = UnifiedScoringSystem()
         self.risk_manager = RiskManager()
 
         self.signals = []
